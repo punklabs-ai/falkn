@@ -1,0 +1,30 @@
+name: Release Falkn CLI
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Test daemon and CLI
+        run: go test ./...
+      - name: Build release archives
+        run: sh scripts/package-release.sh "${GITHUB_REF_NAME}" dist
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${GITHUB_REF_NAME}"
+          dist/falkn_*.tar.gz dist/checksums.txt
+          --verify-tag --generate-notes
