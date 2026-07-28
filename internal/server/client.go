@@ -13,9 +13,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/punklabs-ai/falkn/internal/agentcontext"
 	"github.com/punklabs-ai/falkn/internal/notifications"
 	"github.com/punklabs-ai/falkn/internal/protocol"
-	"github.com/punklabs-ai/falkn/internal/telemetry"
 )
 
 const maxResponseBytes = 4 * 1024 * 1024
@@ -227,7 +227,7 @@ func enrichTranscriptResponse(request protocol.Request, response []byte) []byte 
 	if json.Unmarshal(request.Params, &params) != nil || params.SessionID == "" {
 		return response
 	}
-	percent := telemetry.ContextRemainingPercent(params.SessionID)
+	percent := agentcontext.RemainingPercent(params.SessionID)
 	if percent == nil {
 		return response
 	}

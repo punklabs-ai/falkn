@@ -1,4 +1,4 @@
-package telemetry
+package agentcontext
 
 import (
 	"bufio"
@@ -16,10 +16,10 @@ import (
 
 const maxRolloutTailBytes int64 = 512 * 1024
 
-// ContextRemainingPercent returns Codex's latest active-context percentage.
+// RemainingPercent returns Codex's latest active-context percentage.
 // Codex keeps this counter in the rollout file held open by its native process.
-// A nil result means the agent does not expose compatible telemetry yet.
-func ContextRemainingPercent(sessionID string) *int {
+// A nil result means the agent does not report a compatible counter yet.
+func RemainingPercent(sessionID string) *int {
 	if strings.TrimSpace(sessionID) == "" {
 		return nil
 	}
