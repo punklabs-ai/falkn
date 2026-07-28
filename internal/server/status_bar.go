@@ -287,8 +287,7 @@ func (bar *attachStatusBar) clearLocked(row int) error {
 }
 
 func (bar *attachStatusBar) observeLayoutLocked(data []byte) {
-	combined := make([]byte, 0, len(bar.layoutSequenceTail)+len(data))
-	combined = append(combined, bar.layoutSequenceTail...)
+	combined := append([]byte(nil), bar.layoutSequenceTail...)
 	combined = append(combined, data...)
 	if terminalOutputResetsLayout(combined) {
 		bar.scrollRegionDirty = true
@@ -304,8 +303,7 @@ func (bar *attachStatusBar) observeHandoffLocked(data []byte) {
 	if bar.handoffSessionID != "" {
 		return
 	}
-	combined := make([]byte, 0, len(bar.handoffSequenceTail)+len(data))
-	combined = append(combined, bar.handoffSequenceTail...)
+	combined := append([]byte(nil), bar.handoffSequenceTail...)
 	combined = append(combined, data...)
 	if sessionID := attachHandoffSessionID(combined); sessionID != "" {
 		bar.handoffSessionID = sessionID
