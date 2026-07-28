@@ -12,7 +12,7 @@
 ## install
 
 ```sh
-curl -fsSL https://github.com/punklabs-ai/falkn/raw/refs/heads/main/install.sh | sh
+curl -fsSL https://falkn.dev/install.sh | sh
 ```
 
 The installer detects macOS or Linux on ARM64 or x86-64, downloads the matching
