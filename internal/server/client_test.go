@@ -1,13 +1,41 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/punklabs-ai/falkn/internal/protocol"
 )
+
+func TestReadRequestAcceptsANewlineDelimitedJSONFrame(t *testing.T) {
+	request, err := readRequest(strings.NewReader("{\"method\":\"list\"}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(request), `{"method":"list"}`; got != want {
+		t.Fatalf("request = %q, want %q", got, want)
+	}
+}
+
+func TestReadRequestRejectsLegacyBase64Arguments(t *testing.T) {
+	err := serve(strings.NewReader("eyJtZXRob2QiOiJsaXN0In0=\n"), io.Discard, remoteOrigin)
+	if err == nil || err.Error() != "request is not valid JSON" {
+		t.Fatalf("serve error = %v, want invalid JSON", err)
+	}
+}
+
+func TestReadRequestRejectsOversizedFrames(t *testing.T) {
+	frame := bytes.Repeat([]byte{'x'}, maxRequestBytes+1)
+	frame = append(frame, '\n')
+	if _, err := readRequest(bytes.NewReader(frame)); err == nil {
+		t.Fatal("oversized request was accepted")
+	}
+}
 
 func TestSuccessfulTranscriptRequestMarksSessionVisible(t *testing.T) {
 	directory := t.TempDir()

@@ -28,10 +28,10 @@ func run(arguments []string) error {
 		}
 		return server.New(buildinfo.Version).Serve()
 	case "rpc":
-		if len(arguments) != 2 {
-			return fmt.Errorf("usage: falknd rpc <base64-json-request>")
+		if len(arguments) != 1 {
+			return fmt.Errorf("usage: printf '%%s\\n' '<json-request>' | falknd rpc")
 		}
-		return server.Call(arguments[1], os.Stdout)
+		return server.Call(os.Stdin, os.Stdout)
 	case "notify-watch":
 		if len(arguments) != 1 {
 			return fmt.Errorf("notify-watch does not accept arguments")
@@ -61,7 +61,7 @@ func printUsage() {
 	fmt.Println("falknd - Falkn's persistent coding-agent runtime")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  falknd rpc <base64-json-request>  Send one local RPC request")
-	fmt.Println("  falknd serve                      Run the background server")
-	fmt.Println("  falknd version                    Print version information")
+	fmt.Println("  falknd rpc      Read one JSON RPC request from standard input")
+	fmt.Println("  falknd serve    Run the background server")
+	fmt.Println("  falknd version  Print version information")
 }
