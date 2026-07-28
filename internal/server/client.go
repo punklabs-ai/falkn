@@ -1,8 +1,8 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,28 +32,25 @@ const (
 
 // Call serves one request from a remote client, which in practice is the mobile
 // app reaching this host over SSH.
-func Call(encodedRequest string, output io.Writer) error {
-	return serve(encodedRequest, output, remoteOrigin)
+func Call(input io.Reader, output io.Writer) error {
+	return serve(input, output, remoteOrigin)
 }
 
 // CallLocal serves one request the falkn CLI makes on its own behalf. Local
 // work never asks the phone to follow a session: someone is already sitting at
 // the terminal it belongs to.
-func CallLocal(encodedRequest string, output io.Writer) error {
-	return serve(encodedRequest, output, localOrigin)
+func CallLocal(input io.Reader, output io.Writer) error {
+	return serve(input, output, localOrigin)
 }
 
-func serve(encodedRequest string, output io.Writer, origin requestOrigin) error {
-	request, err := base64.StdEncoding.DecodeString(encodedRequest)
+func serve(input io.Reader, output io.Writer, origin requestOrigin) error {
+	request, err := readRequest(input)
 	if err != nil {
-		return errors.New("request is not valid Base64")
-	}
-	if len(request) == 0 || len(request) > maxRequestBytes {
-		return fmt.Errorf("request must contain between 1 and %d bytes", maxRequestBytes)
+		return err
 	}
 	var envelope protocol.Request
 	if err := json.Unmarshal(request, &envelope); err != nil {
-		return errors.New("decoded request is not valid JSON")
+		return errors.New("request is not valid JSON")
 	}
 
 	paths, err := RuntimePaths()
@@ -114,6 +111,23 @@ func serve(encodedRequest string, output io.Writer, origin requestOrigin) error 
 	response = enrichTranscriptResponse(envelope, response)
 	_, err = output.Write(response)
 	return err
+}
+
+// readRequest consumes one newline-delimited JSON frame. SSH clients can write
+// the frame to the exec channel's stdin without closing the channel, allowing
+// falknd to reply on stdout while the request stays out of process arguments.
+func readRequest(input io.Reader) ([]byte, error) {
+	reader := bufio.NewReader(io.LimitReader(input, maxRequestBytes+2))
+	request, err := reader.ReadBytes('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("read request: %w", err)
+	}
+	request = bytes.TrimSuffix(request, []byte{'\n'})
+	request = bytes.TrimSuffix(request, []byte{'\r'})
+	if len(request) == 0 || len(request) > maxRequestBytes {
+		return nil, fmt.Errorf("request must contain between 1 and %d bytes", maxRequestBytes)
+	}
+	return request, nil
 }
 
 func markNotificationPresence(request protocol.Request, response []byte, paths Paths) {

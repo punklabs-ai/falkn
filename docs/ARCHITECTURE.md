@@ -9,9 +9,10 @@ relay are implemented and maintained separately.
 ## Connection and process model
 
 SSH remains the authenticated route into a user's machine. A remote client
-sends a bounded, Base64-encoded JSON request as an argument to `falknd rpc`.
-That short-lived command communicates with the persistent daemon over a
-user-only Unix socket.
+sends a bounded, newline-delimited JSON request to the standard input of
+`falknd rpc`. The request is carried as SSH channel data rather than in the
+remote command or its process arguments. That short-lived command communicates
+with the persistent daemon over a user-only Unix socket.
 
 ```text
 Falkn mobile app -> SSH -> falknd rpc --+

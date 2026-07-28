@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,10 +61,10 @@ func run(arguments []string) error {
 	case "serve":
 		return server.New(buildinfo.Version).Serve()
 	case "rpc":
-		if len(arguments) != 2 {
-			return errors.New("usage: falkn rpc <base64-json-request>")
+		if len(arguments) != 1 {
+			return errors.New("usage: printf '%s\\n' '<json-request>' | falkn rpc")
 		}
-		return server.Call(arguments[1], os.Stdout)
+		return server.Call(os.Stdin, os.Stdout)
 	case "notify-watch":
 		paths, err := server.RuntimePaths()
 		if err != nil {
@@ -488,7 +487,7 @@ func call(method string, params any, destination any) error {
 		return err
 	}
 	var output bytes.Buffer
-	if err := server.CallLocal(base64.StdEncoding.EncodeToString(requestData), &output); err != nil {
+	if err := server.CallLocal(bytes.NewReader(requestData), &output); err != nil {
 		return err
 	}
 	var response struct {

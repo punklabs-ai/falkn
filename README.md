@@ -80,7 +80,8 @@ Local terminal -> falkn -------------+                         -> PTY -> shell o
 session metadata, and keeps them alive across client disconnections. It reads
 the shell's process tree to report which agent is running in it. Clients speak a
 versioned JSON protocol over the socket; a remote client sends one bounded,
-Base64-encoded request as an argument to `falknd rpc` over SSH.
+newline-delimited request to the standard input of `falknd rpc` over SSH.
+Request data is never placed in the remote command or its process arguments.
 
 Sessions survive client disconnections, not host reboots: a restart closes the
 PTY masters, and sessions that were running are restored as stopped with their
