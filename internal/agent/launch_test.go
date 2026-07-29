@@ -53,3 +53,34 @@ func TestLaunchArgumentsRejectsFullAccessForUnsupportedAgent(t *testing.T) {
 		t.Fatal("expected unsupported Full Access error")
 	}
 }
+
+func TestRestartArgumentsAreAgentSpecificAndPermissionSafe(t *testing.T) {
+	tests := []struct {
+		spec Spec
+		mode string
+		want []string
+	}{
+		{
+			spec: Spec{ID: "claude", DisplayName: "Claude Code"},
+			mode: PermissionStandard,
+			want: []string{"--continue"},
+		},
+		{
+			spec: Spec{ID: "codex", DisplayName: "Codex"},
+			mode: PermissionFullAccess,
+			want: []string{"--dangerously-bypass-approvals-and-sandbox", "resume", "--last"},
+		},
+	}
+	for _, test := range tests {
+		got, err := RestartArguments(test.spec, test.mode, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, test.want) {
+			t.Fatalf("%s restart arguments = %#v, want %#v", test.spec.ID, got, test.want)
+		}
+	}
+	if _, err := RestartArguments(Spec{ID: "pi", DisplayName: "Pi"}, PermissionStandard, true); err == nil {
+		t.Fatal("unsupported resume unexpectedly succeeded")
+	}
+}

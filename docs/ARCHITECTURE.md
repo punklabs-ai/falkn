@@ -91,6 +91,7 @@ Every response echoes the version and request ID and contains either `result` or
 - `directories.list`
 - `create`
 - `shell.create`
+- `agent.start`
 - `attach` (switches from JSON to a bounded terminal stream after its response)
 - `transcript`
 - `resize`
@@ -104,6 +105,12 @@ Every response echoes the version and request ID and contains either `result` or
 - `key`
 - `notifications.configure` (handled by the current `falknd rpc` client so an upgraded watcher can attach to an already-running daemon)
 
+`transcript` is a bounded, backwards-compatible window API. A request asks for
+the latest line count or supplies `before_line` to page toward older history.
+The response includes `start_line`, `end_line`, `total_lines`, `has_earlier`,
+and an opaque `history_id`. Clients use that fingerprint to discard stale pages
+if the daemon's bounded 2,000-line history advances while they are reading.
+
 The server rejects incompatible protocol versions, unknown methods, missing sessions, unsupported agents, missing directories, oversized prompts and unknown control keys. User titles, directories and prompts are JSON data rather than shell fragments.
 
 New Session can browse the remote filesystem through the read-only
@@ -116,6 +123,17 @@ agent arguments. Full Access maps to each supported agent's documented bypass
 flag inside `falknd`. Additional arguments are passed to `exec.Command` as
 individual values and never interpolated into a shell command. Known bypass
 arguments are rejected unless the client explicitly selects Full Access.
+
+A persistent shell record remembers the last supported agent observed in its
+process tree. When that agent exits, `list` and `transcript` report the shell as
+`idle`, expose the remembered agent, and advertise whether fresh start and
+resume are available. `agent.start` accepts only the session ID, a fresh/resume
+choice, and the typed permission mode. It refuses while an agent or any other
+foreground process still owns the terminal. The daemon resolves the remembered
+executable and constructs the adapter-specific invocation; clients cannot send
+an executable, shell command, or bypass flag through this method. Claude resumes
+with its current-directory continue flow and Codex resumes the most recent
+current-directory conversation.
 
 ## Client boundary
 
@@ -140,7 +158,9 @@ state.
 - Network access remains behind SSH and the user's existing Tailscale or network policy.
 - RPC requests are limited to one megabyte and responses to four megabytes.
 - Prompt input is limited to 256 KiB and terminal history is bounded.
-- Agent executables are selected from the registry and launched directly without a shell.
+- Agent executables are selected from the registry. Direct sessions use
+  `exec.Command`; persistent-shell restarts use a fully quoted invocation made
+  only from the daemon-resolved absolute executable and adapter-owned arguments.
 - Directories are resolved and validated before process creation.
 - Only allowlisted control keys are accepted.
 

@@ -28,7 +28,7 @@ func TestPreflightAdvertisesCLIAndSafeShutdownFeatures(t *testing.T) {
 	if err := json.Unmarshal(encoded, &result); err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"shell", "attach", "daemon_shutdown", "uploads", "attention"} {
+	for _, expected := range []string{"shell", "attach", "daemon_shutdown", "uploads", "attention", "agent_restart", "agent_start"} {
 		found := false
 		for _, feature := range result.Features {
 			found = found || feature == expected

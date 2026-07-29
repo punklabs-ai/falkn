@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -32,6 +33,41 @@ func TestTranscriptRemovesTerminalControlsAndBoundsLines(t *testing.T) {
 	raw := []byte("old\n\x1b[31mred\x1b[0m\nnew\r\n")
 	if got := cleanTranscript(raw, 2); got != "red\nnew" {
 		t.Fatalf("got %q, want %q", got, "red\\nnew")
+	}
+}
+
+func TestTranscriptPagesBackwardWithoutDownloadingTheWholeHistory(t *testing.T) {
+	lines := make([]string, 250)
+	for index := range lines {
+		lines[index] = fmt.Sprintf("line-%03d", index+1)
+	}
+	session := &liveSession{
+		transcript: newByteRing(maxTranscriptBytes),
+		storedText: strings.Join(lines, "\n"),
+	}
+
+	latest := session.transcriptPage(100, nil)
+	if latest.StartLine != 150 || latest.EndLine != 250 || latest.TotalLines != 250 || !latest.HasEarlier {
+		t.Fatalf("latest page metadata = %#v", latest)
+	}
+	if !strings.HasPrefix(latest.Transcript, "line-151\n") ||
+		!strings.HasSuffix(latest.Transcript, "\nline-250") {
+		t.Fatalf("latest page had the wrong range: %q", latest.Transcript)
+	}
+
+	before := latest.StartLine
+	previous := session.transcriptPage(100, &before)
+	if previous.StartLine != 50 || previous.EndLine != 150 || !previous.HasEarlier {
+		t.Fatalf("previous page metadata = %#v", previous)
+	}
+	if latest.HistoryID == "" || previous.HistoryID != latest.HistoryID {
+		t.Fatalf("history cursor changed between pages: %q / %q", latest.HistoryID, previous.HistoryID)
+	}
+
+	before = previous.StartLine
+	oldest := session.transcriptPage(100, &before)
+	if oldest.StartLine != 0 || oldest.EndLine != 50 || oldest.HasEarlier {
+		t.Fatalf("oldest page metadata = %#v", oldest)
 	}
 }
 

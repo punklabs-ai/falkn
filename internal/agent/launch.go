@@ -39,6 +39,25 @@ func LaunchArguments(spec Spec, permissionMode string, additional []string) ([]s
 	}
 }
 
+func RestartArguments(spec Spec, permissionMode string, resume bool) ([]string, error) {
+	var arguments []string
+	if resume {
+		switch spec.ID {
+		case "claude":
+			arguments = []string{"--continue"}
+		case "codex":
+			arguments = []string{"resume", "--last"}
+		default:
+			return nil, fmt.Errorf("%s does not support resuming a previous session", spec.DisplayName)
+		}
+	}
+	return LaunchArguments(spec, permissionMode, arguments)
+}
+
+func SupportsResume(spec Spec) bool {
+	return spec.ID == "claude" || spec.ID == "codex"
+}
+
 func validateAdditionalArguments(agentID, permissionMode string, arguments []string) error {
 	if len(arguments) > maxAdditionalArgs {
 		return fmt.Errorf("additional arguments are limited to %d values", maxAdditionalArgs)

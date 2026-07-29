@@ -119,6 +119,13 @@ build_for_platform() {
       "${repository_root}/cmd/${command}" \
       || fail "could not build ${command} for ${1}/${2}"
   done
+  if [ "$1" = "darwin" ]; then
+    command -v codesign >/dev/null 2>&1 ||
+      fail "codesign is required for a runnable local Darwin build"
+    codesign --force --sign - "${platform_directory}/falkn" \
+      "${platform_directory}/falknd" >/dev/null ||
+      fail "could not ad-hoc sign the Darwin binaries"
+  fi
 }
 
 resolve_platform() {

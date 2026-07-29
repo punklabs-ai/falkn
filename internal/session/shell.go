@@ -16,6 +16,7 @@ import (
 	"github.com/punklabs-ai/falkn/internal/agent"
 	"github.com/punklabs-ai/falkn/internal/protocol"
 	"github.com/punklabs-ai/falkn/internal/workspace"
+	"golang.org/x/sys/unix"
 )
 
 func (m *Manager) CreateShell(params protocol.ShellCreateParams) (protocol.SessionRecord, error) {
@@ -58,6 +59,7 @@ func (m *Manager) CreateShell(params protocol.ShellCreateParams) (protocol.Sessi
 			Title:           title,
 			Directory:       directory,
 			AgentID:         "shell",
+			AgentState:      "idle",
 			CreatedAt:       time.Now().Unix(),
 			Status:          "running",
 			Process:         filepath.Base(shell.Executable),
@@ -176,20 +178,144 @@ type processRecord struct {
 	args    string
 }
 
-func (s *liveSession) refreshForegroundAgent() {
+func (s *liveSession) refreshForegroundAgent(registry *agent.Registry) bool {
 	record := s.snapshot()
 	if record.Kind != "shell" || record.Status != "running" || s.command == nil || s.command.Process == nil {
-		return
+		return false
 	}
 	agentID, process := activeAgentProcess(s.command.Process.Pid)
+	agentState := "active"
+	canStart := false
+	canResume := false
 	if agentID == "" {
-		agentID = "shell"
-		process = filepath.Base(s.command.Path)
+		s.stateMu.RLock()
+		starting := time.Now().Before(s.agentStartingUntil)
+		startingAgent := s.record.PreferredAgentID
+		s.stateMu.RUnlock()
+		if starting && startingAgent != "" {
+			agentID = startingAgent
+			process = startingAgent
+			agentState = "starting"
+		} else {
+			agentID = "shell"
+			process = filepath.Base(s.command.Path)
+			if s.shellIsIdle() {
+				agentState = "idle"
+				// An idle persistent shell can start any supported agent when
+				// the caller supplies its ID. A remembered agent remains
+				// optional and is only required for the resume shortcut.
+				canStart = true
+				if spec, ok := registry.Find(record.PreferredAgentID); ok {
+					canResume = agent.SupportsResume(spec)
+				}
+			} else {
+				agentState = "busy"
+			}
+		}
 	}
 	s.stateMu.Lock()
+	changed := s.record.AgentID != agentID ||
+		s.record.Process != process ||
+		s.record.AgentState != agentState ||
+		s.record.CanStartAgent != canStart ||
+		s.record.CanResumeAgent != canResume
 	s.record.AgentID = agentID
 	s.record.Process = process
+	s.record.AgentState = agentState
+	s.record.CanStartAgent = canStart
+	s.record.CanResumeAgent = canResume
+	if agentID != "shell" {
+		if s.record.PreferredAgentID != agentID {
+			changed = true
+		}
+		s.record.PreferredAgentID = agentID
+	}
+	if agentState == "active" {
+		s.agentStartingUntil = time.Time{}
+	}
 	s.stateMu.Unlock()
+	return changed
+}
+
+func (s *liveSession) shellIsIdle() bool {
+	if s.pty == nil || s.command == nil || s.command.Process == nil {
+		return false
+	}
+	foregroundProcessGroup, err := unix.IoctlGetInt(int(s.pty.Fd()), unix.TIOCGPGRP)
+	return err == nil && foregroundProcessGroup == s.command.Process.Pid
+}
+
+func (m *Manager) StartAgent(params protocol.AgentStartParams) (protocol.SessionRecord, error) {
+	session, err := m.running(params.SessionID)
+	if err != nil {
+		return protocol.SessionRecord{}, err
+	}
+	session.agentStartMu.Lock()
+	defer session.agentStartMu.Unlock()
+
+	session.refreshForegroundAgent(m.agents)
+	record := session.snapshot()
+	if record.Kind != "shell" {
+		return protocol.SessionRecord{}, errors.New("this session does not have a persistent Falkn shell")
+	}
+	if record.AgentState != "idle" || !record.CanStartAgent {
+		return protocol.SessionRecord{}, errors.New("the session is not at an idle shell prompt")
+	}
+	agentID := strings.TrimSpace(params.AgentID)
+	if agentID == "" {
+		agentID = record.PreferredAgentID
+	}
+	if params.Resume && (record.PreferredAgentID == "" || agentID != record.PreferredAgentID) {
+		return protocol.SessionRecord{}, errors.New("this agent has no previous context to resume in the session")
+	}
+	spec, ok := m.agents.Find(agentID)
+	if !ok {
+		return protocol.SessionRecord{}, fmt.Errorf("unsupported agent %q", agentID)
+	}
+	resolution, ok := agent.ResolveExecutable(spec)
+	if !ok {
+		return protocol.SessionRecord{}, fmt.Errorf("%s is not available in falknd's PATH", spec.DisplayName)
+	}
+	arguments, err := agent.RestartArguments(spec, params.PermissionMode, params.Resume)
+	if err != nil {
+		return protocol.SessionRecord{}, err
+	}
+	invocation := shellInvocation(resolution.Executable, arguments)
+
+	session.stateMu.Lock()
+	session.record.AgentID = spec.ID
+	session.record.PreferredAgentID = spec.ID
+	session.record.Process = spec.Executable
+	session.record.AgentState = "starting"
+	session.record.CanStartAgent = false
+	session.record.CanResumeAgent = false
+	session.record.PermissionMode = normalizedPermissionMode(params.PermissionMode)
+	session.agentStartingUntil = time.Now().Add(5 * time.Second)
+	session.stateMu.Unlock()
+	if err := session.write([]byte(invocation + "\r")); err != nil {
+		session.stateMu.Lock()
+		session.agentStartingUntil = time.Time{}
+		session.stateMu.Unlock()
+		session.refreshForegroundAgent(m.agents)
+		return protocol.SessionRecord{}, err
+	}
+	if err := m.persist(); err != nil {
+		return protocol.SessionRecord{}, err
+	}
+	return session.snapshot(), nil
+}
+
+func shellInvocation(executable string, arguments []string) string {
+	parts := make([]string, 0, len(arguments)+1)
+	parts = append(parts, shellQuote(executable))
+	for _, argument := range arguments {
+		parts = append(parts, shellQuote(argument))
+	}
+	return strings.Join(parts, " ")
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func activeAgentProcess(rootPID int) (string, string) {

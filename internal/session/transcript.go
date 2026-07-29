@@ -3,24 +3,35 @@ package session
 import "strings"
 
 func cleanTranscript(raw []byte, historyLines int) string {
+	lines := cleanedTranscriptLines(raw)
+	if historyLines <= 0 {
+		historyLines = 600
+	}
+	if historyLines > maximumTerminalHistoryLines {
+		historyLines = maximumTerminalHistoryLines
+	}
+	if len(lines) > historyLines {
+		lines = lines[len(lines)-historyLines:]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func cleanedTranscriptLines(raw []byte) []string {
 	clean := stripTerminalControls(raw)
 	clean = strings.ToValidUTF8(clean, "")
 	clean = strings.ReplaceAll(clean, "\r\n", "\n")
 	clean = strings.ReplaceAll(clean, "\r", "\n")
 	clean = applyBackspaces(clean)
 	clean = strings.TrimRight(clean, "\n")
+	if clean == "" {
+		return nil
+	}
 
-	if historyLines <= 0 {
-		historyLines = 600
-	}
-	if historyLines > 2_000 {
-		historyLines = 2_000
-	}
 	lines := strings.Split(clean, "\n")
-	if len(lines) > historyLines {
-		lines = lines[len(lines)-historyLines:]
+	if len(lines) > maximumTerminalHistoryLines {
+		lines = lines[len(lines)-maximumTerminalHistoryLines:]
 	}
-	return strings.Join(lines, "\n")
+	return lines
 }
 
 func stripTerminalControls(raw []byte) string {

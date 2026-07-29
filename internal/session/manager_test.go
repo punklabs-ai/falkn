@@ -344,6 +344,130 @@ func TestSupportedAgentNameRecognizesNodeLaunchers(t *testing.T) {
 	}
 }
 
+func TestPersistentShellRemembersAndSafelyRestartsExitedAgent(t *testing.T) {
+	tools := t.TempDir()
+	claude := filepath.Join(tools, "claude")
+	script := "#!/bin/sh\nprintf 'claude-ready:%s\\n' \"$*\"\nwhile IFS= read -r line; do [ \"$line\" = quit ] && exit 0; done\n"
+	if err := os.WriteFile(claude, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", tools+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SHELL", "/bin/sh")
+
+	registry := agent.NewRegistry([]agent.Spec{
+		{ID: "claude", DisplayName: "Claude Code", Executable: "claude"},
+	})
+	manager := NewManager(registry)
+	record, err := manager.CreateShell(protocol.ShellCreateParams{
+		Title: "Persistent", Directory: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Delete(record.ID)
+
+	if err := manager.WriteRaw(record.ID, []byte("claude\r")); err != nil {
+		t.Fatal(err)
+	}
+	waitForTranscript(t, manager, record.ID, "claude-ready:")
+	waitForSessionRecord(t, manager, record.ID, func(record protocol.SessionRecord) bool {
+		return record.AgentID == "claude" && record.PreferredAgentID == "claude" &&
+			record.AgentState == "active" && !record.CanStartAgent
+	})
+
+	if err := manager.WriteRaw(record.ID, []byte("quit\r")); err != nil {
+		t.Fatal(err)
+	}
+	waitForSessionRecord(t, manager, record.ID, func(record protocol.SessionRecord) bool {
+		return record.AgentID == "shell" && record.PreferredAgentID == "claude" &&
+			record.AgentState == "idle" && record.CanStartAgent && record.CanResumeAgent
+	})
+
+	started, err := manager.StartAgent(protocol.AgentStartParams{
+		SessionID: record.ID, Resume: true, PermissionMode: agent.PermissionFullAccess,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.AgentID != "claude" || started.AgentState != "starting" ||
+		started.PermissionMode != agent.PermissionFullAccess {
+		t.Fatalf("started record = %#v", started)
+	}
+	waitForTranscript(t, manager, record.ID, "claude-ready:--dangerously-skip-permissions --continue")
+}
+
+func TestPersistentShellStartsExplicitAgentBeforeOneHasBeenObserved(t *testing.T) {
+	tools := t.TempDir()
+	codex := filepath.Join(tools, "codex")
+	script := "#!/bin/sh\nprintf 'codex-ready:%s\\n' \"$*\"\nwhile IFS= read -r line; do [ \"$line\" = quit ] && exit 0; done\n"
+	if err := os.WriteFile(codex, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", tools+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SHELL", "/bin/sh")
+
+	registry := agent.NewRegistry([]agent.Spec{
+		{ID: "codex", DisplayName: "Codex", Executable: "codex"},
+	})
+	manager := NewManager(registry)
+	record, err := manager.CreateShell(protocol.ShellCreateParams{
+		Title: "Persistent", Directory: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Delete(record.ID)
+
+	record = waitForSessionRecord(t, manager, record.ID, func(record protocol.SessionRecord) bool {
+		return record.AgentID == "shell" && record.PreferredAgentID == "" &&
+			record.AgentState == "idle" && record.CanStartAgent && !record.CanResumeAgent
+	})
+
+	started, err := manager.StartAgent(protocol.AgentStartParams{
+		SessionID: record.ID, AgentID: "codex", PermissionMode: agent.PermissionStandard,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.AgentID != "codex" || started.PreferredAgentID != "codex" ||
+		started.AgentState != "starting" || started.CanStartAgent {
+		t.Fatalf("started record = %#v", started)
+	}
+	waitForTranscript(t, manager, record.ID, "codex-ready:")
+}
+
+func TestPersistentShellRejectsResumeForAnUnrememberedAgent(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	manager := NewManager(agent.NewRegistry([]agent.Spec{
+		{ID: "codex", DisplayName: "Codex", Executable: "codex"},
+	}))
+	record, err := manager.CreateShell(protocol.ShellCreateParams{
+		Title: "Persistent", Directory: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Delete(record.ID)
+	waitForSessionRecord(t, manager, record.ID, func(record protocol.SessionRecord) bool {
+		return record.AgentState == "idle" && record.CanStartAgent
+	})
+
+	_, err = manager.StartAgent(protocol.AgentStartParams{
+		SessionID: record.ID, AgentID: "codex", Resume: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "no previous context") {
+		t.Fatalf("error = %v, want no previous context", err)
+	}
+}
+
+func TestShellInvocationQuotesEveryValueAsLiteralData(t *testing.T) {
+	got := shellInvocation("/path/agent's tool", []string{"--prompt", "$(touch /tmp/nope)"})
+	want := "'/path/agent'\"'\"'s tool' '--prompt' '$(touch /tmp/nope)'"
+	if got != want {
+		t.Fatalf("invocation = %q, want %q", got, want)
+	}
+}
+
 func assertPTYSize(t *testing.T, terminal *os.File, expectedColumns, expectedRows int) {
 	t.Helper()
 	rows, columns, err := pty.Getsize(terminal)
@@ -379,6 +503,26 @@ func waitForTranscript(t *testing.T, manager *Manager, id, expected string) stri
 	}
 	t.Fatalf("session %s did not produce %q", id, expected)
 	return ""
+}
+
+func waitForSessionRecord(
+	t *testing.T,
+	manager *Manager,
+	id string,
+	matches func(protocol.SessionRecord) bool,
+) protocol.SessionRecord {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, record := range manager.List() {
+			if record.ID == id && matches(record) {
+				return record
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("session %s did not reach the expected agent state", id)
+	return protocol.SessionRecord{}
 }
 
 func TestAttentionIsRecomputedOnlyAfterNewOutput(t *testing.T) {

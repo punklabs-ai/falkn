@@ -60,6 +60,13 @@ type ShellCreateParams struct {
 	TerminalRows    int    `json:"terminal_rows,omitempty"`
 }
 
+type AgentStartParams struct {
+	SessionID      string `json:"session_id"`
+	AgentID        string `json:"agent_id,omitempty"`
+	Resume         bool   `json:"resume,omitempty"`
+	PermissionMode string `json:"permission_mode,omitempty"`
+}
+
 type AttachParams struct {
 	SessionID string `json:"session_id"`
 	Columns   int    `json:"columns,omitempty"`
@@ -78,6 +85,7 @@ type RenameParams struct {
 type TranscriptParams struct {
 	SessionID    string `json:"session_id"`
 	HistoryLines int    `json:"history_lines,omitempty"`
+	BeforeLine   *int   `json:"before_line,omitempty"`
 }
 
 type ResizeParams struct {
@@ -152,6 +160,10 @@ type SessionRecord struct {
 	Title              string `json:"title"`
 	Directory          string `json:"directory"`
 	AgentID            string `json:"agent_id"`
+	PreferredAgentID   string `json:"preferred_agent_id,omitempty"`
+	AgentState         string `json:"agent_state,omitempty"`
+	CanStartAgent      bool   `json:"can_start_agent"`
+	CanResumeAgent     bool   `json:"can_resume_agent"`
 	CreatedAt          int64  `json:"created_at"`
 	Status             string `json:"status"`
 	Process            string `json:"process"`
@@ -189,8 +201,18 @@ type TranscriptResult struct {
 	Transcript              string `json:"transcript"`
 	Status                  string `json:"status"`
 	AgentID                 string `json:"agent_id,omitempty"`
+	PreferredAgentID        string `json:"preferred_agent_id,omitempty"`
+	AgentState              string `json:"agent_state,omitempty"`
+	CanStartAgent           bool   `json:"can_start_agent"`
+	CanResumeAgent          bool   `json:"can_resume_agent"`
+	PermissionMode          string `json:"permission_mode,omitempty"`
 	Process                 string `json:"process,omitempty"`
 	ContextRemainingPercent *int   `json:"context_remaining_percent,omitempty"`
+	StartLine               int    `json:"start_line"`
+	EndLine                 int    `json:"end_line"`
+	TotalLines              int    `json:"total_lines"`
+	HasEarlier              bool   `json:"has_earlier"`
+	HistoryID               string `json:"history_id"`
 }
 
 type AttachResult struct {

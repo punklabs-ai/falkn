@@ -2,6 +2,7 @@ package session
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,15 @@ import (
 	"github.com/punklabs-ai/falkn/internal/protocol"
 	"github.com/punklabs-ai/falkn/internal/workspace"
 )
+
+type TranscriptPage struct {
+	Transcript string
+	StartLine  int
+	EndLine    int
+	TotalLines int
+	HasEarlier bool
+	HistoryID  string
+}
 
 const (
 	maxTranscriptBytes  = 2 * 1024 * 1024
@@ -53,6 +63,8 @@ type liveSession struct {
 	terminalHistory    []string
 	lastTerminalScreen []string
 	stateMu            sync.RWMutex
+	agentStartMu       sync.Mutex
+	agentStartingUntil time.Time
 	writeMu            sync.Mutex
 	outputMu           sync.Mutex
 	subscribers        map[uint64]*outputSubscriber
@@ -198,10 +210,16 @@ func (m *Manager) List() []protocol.SessionRecord {
 	m.mu.RUnlock()
 
 	records := make([]protocol.SessionRecord, 0, len(sessions))
+	metadataChanged := false
 	for _, session := range sessions {
-		session.refreshForegroundAgent()
+		if session.refreshForegroundAgent(m.agents) {
+			metadataChanged = true
+		}
 		session.refreshAttention()
 		records = append(records, session.snapshot())
+	}
+	if metadataChanged {
+		_ = m.persist()
 	}
 
 	sort.Slice(records, func(left, right int) bool {
@@ -267,16 +285,18 @@ func (m *Manager) Create(params protocol.CreateParams) (protocol.SessionRecord, 
 
 	session := &liveSession{
 		record: protocol.SessionRecord{
-			ID:              id,
-			Title:           title,
-			Directory:       directory,
-			AgentID:         spec.ID,
-			CreatedAt:       time.Now().Unix(),
-			Status:          "running",
-			Process:         spec.Executable,
-			AttachedClients: 0,
-			PermissionMode:  normalizedPermissionMode(params.PermissionMode),
-			Kind:            "agent",
+			ID:               id,
+			Title:            title,
+			Directory:        directory,
+			AgentID:          spec.ID,
+			PreferredAgentID: spec.ID,
+			AgentState:       "active",
+			CreatedAt:        time.Now().Unix(),
+			Status:           "running",
+			Process:          spec.Executable,
+			AttachedClients:  0,
+			PermissionMode:   normalizedPermissionMode(params.PermissionMode),
+			Kind:             "agent",
 		},
 		pty:        terminal,
 		command:    command,
@@ -317,13 +337,22 @@ func normalizedPermissionMode(value string) string {
 }
 
 func (m *Manager) Transcript(sessionID string, historyLines int) (string, protocol.SessionRecord, error) {
+	page, record, err := m.TranscriptPage(sessionID, historyLines, nil)
+	return page.Transcript, record, err
+}
+
+func (m *Manager) TranscriptPage(
+	sessionID string,
+	historyLines int,
+	beforeLine *int,
+) (TranscriptPage, protocol.SessionRecord, error) {
 	session, err := m.find(sessionID)
 	if err != nil {
-		return "", protocol.SessionRecord{}, err
+		return TranscriptPage{}, protocol.SessionRecord{}, err
 	}
-	session.refreshForegroundAgent()
+	session.refreshForegroundAgent(m.agents)
 	record := session.snapshot()
-	return session.renderedTranscript(historyLines), record, nil
+	return session.transcriptPage(historyLines, beforeLine), record, nil
 }
 
 func (m *Manager) Resize(sessionID string, columns, rows int) error {
@@ -563,33 +592,60 @@ func (s *liveSession) readOutput() {
 }
 
 func (s *liveSession) renderedTranscript(historyLines int) string {
-	if s.terminal == nil {
-		s.stateMu.RLock()
-		defer s.stateMu.RUnlock()
-		return s.storedText
+	return s.transcriptPage(historyLines, nil).Transcript
+}
+
+func (s *liveSession) transcriptPage(historyLines int, beforeLine *int) TranscriptPage {
+	lines := s.renderedTranscriptLines()
+	totalLines := len(lines)
+	endLine := totalLines
+	if beforeLine != nil {
+		endLine = min(max(*beforeLine, 0), totalLines)
 	}
 	if historyLines <= 0 {
 		historyLines = 600
 	}
-	if historyLines > 2_000 {
-		historyLines = 2_000
+	historyLines = min(historyLines, maximumTerminalHistoryLines)
+	startLine := max(0, endLine-historyLines)
+	pageLines := lines[startLine:endLine]
+	return TranscriptPage{
+		Transcript: strings.Join(pageLines, "\n"),
+		StartLine:  startLine,
+		EndLine:    endLine,
+		TotalLines: totalLines,
+		HasEarlier: startLine > 0,
+		HistoryID:  transcriptHistoryID(lines),
+	}
+}
+
+func (s *liveSession) renderedTranscriptLines() []string {
+	if s.terminal == nil {
+		s.stateMu.RLock()
+		defer s.stateMu.RUnlock()
+		return cleanedTranscriptLines([]byte(s.storedText))
 	}
 
 	s.terminalMu.Lock()
 	defer s.terminalMu.Unlock()
 	lines := s.renderedTerminalLinesLocked()
-	if len(lines) > historyLines {
-		lines = lines[len(lines)-historyLines:]
-	}
 	for len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
 	lines = compactBlankLines(lines, 2)
-	result := strings.TrimSpace(strings.Join(lines, "\n"))
-	if result == "" {
-		return cleanTranscript(s.transcript.Bytes(), historyLines)
+	if len(lines) == 0 {
+		return cleanedTranscriptLines(s.transcript.Bytes())
 	}
-	return result
+	if len(lines) > maximumTerminalHistoryLines {
+		lines = lines[len(lines)-maximumTerminalHistoryLines:]
+	}
+	return lines
+}
+
+func transcriptHistoryID(lines []string) string {
+	const fingerprintLines = 4
+	end := min(len(lines), fingerprintLines)
+	fingerprint := sha256.Sum256([]byte(strings.Join(lines[:end], "\n")))
+	return hex.EncodeToString(fingerprint[:8])
 }
 
 func normalizedTerminalSize(columns, rows int) (int, int) {

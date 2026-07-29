@@ -132,7 +132,7 @@ func (s *Server) dispatch(request protocol.Request) protocol.Response {
 		}
 		return protocol.Success(request.RequestID, protocol.PreflightResult{
 			DaemonVersion: s.version, ProtocolVersion: protocol.Version, Capabilities: capabilities,
-			Features: []string{"shell", "attach", "daemon_shutdown", "uploads", "attention"},
+			Features: []string{"shell", "attach", "daemon_shutdown", "uploads", "attention", "agent_restart", "agent_start"},
 		})
 	case "daemon.shutdown":
 		running := s.sessions.RunningSessions()
@@ -183,17 +183,36 @@ func (s *Server) dispatch(request protocol.Request) protocol.Response {
 			return sessionFailure(request.RequestID, err)
 		}
 		return protocol.Success(request.RequestID, protocol.CreateResult{Session: record})
+	case "agent.start":
+		var params protocol.AgentStartParams
+		if response := decodeParams(request, &params); response != nil {
+			return *response
+		}
+		record, err := s.sessions.StartAgent(params)
+		if err != nil {
+			return sessionFailure(request.RequestID, err)
+		}
+		return protocol.Success(request.RequestID, protocol.CreateResult{Session: record})
 	case "transcript":
 		var params protocol.TranscriptParams
 		if response := decodeParams(request, &params); response != nil {
 			return *response
 		}
-		transcript, record, err := s.sessions.Transcript(params.SessionID, params.HistoryLines)
+		page, record, err := s.sessions.TranscriptPage(
+			params.SessionID,
+			params.HistoryLines,
+			params.BeforeLine,
+		)
 		if err != nil {
 			return sessionFailure(request.RequestID, err)
 		}
 		return protocol.Success(request.RequestID, protocol.TranscriptResult{
-			Transcript: transcript, Status: record.Status, AgentID: record.AgentID, Process: record.Process,
+			Transcript: page.Transcript, Status: record.Status, AgentID: record.AgentID, Process: record.Process,
+			PreferredAgentID: record.PreferredAgentID, AgentState: record.AgentState,
+			CanStartAgent: record.CanStartAgent, CanResumeAgent: record.CanResumeAgent,
+			PermissionMode: record.PermissionMode,
+			StartLine:      page.StartLine, EndLine: page.EndLine, TotalLines: page.TotalLines,
+			HasEarlier: page.HasEarlier, HistoryID: page.HistoryID,
 		})
 	case "resize":
 		var params protocol.ResizeParams
